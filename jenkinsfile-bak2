@@ -1,0 +1,136 @@
+node('dotnetslave'){ 
+    stage ('DEV'){
+    task'SCM Checkout'
+    echo'SCM Checkout' 
+    git branch: 'master',
+    credentialsId: '37f6cec8-5278-43b5-a785-2d1c3a9a917f',
+url: 'https://github.com/SalientCRGT/devops-dotnet.git'
+
+    task'Build'
+    echo'Build Started'
+     bat 'C:/tools/nuget.exe restore C:/dotnetjenkins/workspace/demo_dotnet/samples/aspnetcore/mvc/testing/TestingMVC/TestingMVC.sln'
+     bat "\"${tool 'msbuild.exe'}\" C:/dotnetjenkins/workspace/demo_dotnet/samples/aspnetcore/mvc/testing/TestingMVC/TestingMVC.sln /p:Configuration=Release /p:Platform=\"Any CPU\" /p:Productversion=1.0.0"
+    echo'Build Ended'
+    sleep 3
+    
+    task'Build + SonarQube analysis' 
+    echo'Sonarcode Analysis'
+    def sqScannerMsBuildHome = tool 'SonarScanner'
+    withSonarQubeEnv('sonarqube_windows') {
+      // Due to SONARMSBRU-307 value of sonar.host.url and credentials should be passed on command line
+     bat "${sqScannerMsBuildHome}\\SonarQube.Scanner.MSBuild.exe begin /k:dotnetsonar /n:dotnetsamples /v:1.0 /d:sonar.host.url=%SONAR_HOST_URL% /d:sonar.login=%SONAR_AUTH_TOKEN%"
+     bat "\"${tool 'msbuild.exe'}\" C:/dotnetjenkins/workspace/demo_dotnet/samples/aspnetcore/mvc/testing/TestingMVC/TestingMVC.sln /p:Configuration=Release /p:Platform=\"Any CPU\" /p:Productversion=1.0.0"
+     bat "${sqScannerMsBuildHome}\\SonarQube.Scanner.MSBuild.exe end"
+      echo'Sonar Qube Analysis Completed'
+      sleep 3
+
+    task'Publish'
+    echo'Publish Code'
+    bat 'dotnet publish C:/dotnetjenkins/workspace/demo_dotnet/samples/aspnetcore/mvc/testing/TestingMVC/src/TestingMVC/TestingMVC.csproj --configuration Release --output C:/dotnetjenkins/publish'
+    echo'Published Code'
+    sleep 3
+    
+    task'package'
+    echo'echo nupkgs package is creating'
+    bat 'nuget pack C:/dotnetjenkins/workspace/demo_dotnet/samples/aspnetcore/mvc/testing/TestingMVC/src/TestingMVC/TestingMVC.csproj -Properties Configuration=Release'
+    echo'echo nupkgs package is created'
+    sleep 3
+    
+    task'Nexus Storage'
+    echo'Storing Artifacts In Nexus Repository'
+    bat 'dotnet nuget push C:/dotnetjenkins/workspace/demo_dotnet/TestingMVC.1.0.0.nupkg -k eb59ccec-6719-385e-b031-802ffb2f8709 -s http://100.26.126.233:8081/repository/nuget-hosted/'
+    echo'Stored In Nexus Repository'
+    sleep 5
+    }
+   task'Create Docker Image'
+   echo'Build Docker Image'
+//   bat 'docker build -t salientcrgt/dotnetdev-img:0.1 .'
+     bat 'docker build -t dotnet-img .'
+   sleep 10
+   
+   task'Push to Docker Hub'
+   echo'Push To Docker Hub'
+//    withCredentials([string(credentialsId: 'S1Docker', variable: 'Docker')]) {
+//    bat "docker login -u salientcrgt -p ${Docker}"
+//    }
+//    bat 'docker push salientcrgt/dotnetdev-img:0.1'
+    withCredentials([string(credentialsId: 'docker_secret', variable: 'password')]) {
+      bat "docker login -u iiiradmicro1 -p ${password}"
+    }
+    bat 'docker tag dotnet-img iiiradmicro1/dotnet-img:dev'
+    bat 'docker push iiiradmicro1/dotnet-img:dev'
+    echo'Pushed To Docker Hub'
+//    sleep 60
+    
+    task'Stop Prev Continers'
+    echo'stop continer'
+    //bat 'docker rm -f dotnetdev'
+    sleep 30
+
+    task'Deploy-Dev'
+    echo'Deploy To Dev Environment'
+    bat 'docker run --name dotnetdev -d -p 4040:80 --rm -t -d dotnet-img'
+    echo'Deployed-in-Dev Environment'
+    sleep 15
+ 
+    task'Functional Test'
+    echo'Selenium-Functional Test'
+    echo'Selenium-Functional Test Done'
+    sleep 3
+}
+    stage('STAGE') {
+   // task'builddockerimage'
+   // echo'Build Docker Image'
+   //'bat docker build -t dotnetdev-img .'
+    
+    sleep 30
+
+   task'Push to Docker Hub'
+   echo'Push To Docker Hub'
+   //bat 'docker tag dotnetdev-img salientcrgt/dotnetdev-img'
+   //bat 'docker push salientcrgt/dotnetdev-img:latest'
+//    bat 'docker push iiiradmicro1/dotnetdev-img:latest'
+    bat 'docker tag dotnet-img iiiradmicro1/dotnet-img:stage'
+    bat 'docker push iiiradmicro1/dotnet-img:stage'
+    sleep 30
+ 
+    task'Regression Test'
+    echo'Selenium-Regression Test'
+    sleep 15
+    
+    task'Performance Test'
+    echo'JMeter LoadBalancing Test Started'
+    bat 'C:\\Users\\Administrator\\Downloads\\apache-jmeter-5.0\\apache-jmeter-5.0\\bin\\jmeter.bat -n -t jmeter_example.jmx -l Jmeter_test_Report.jtl'
+    echo'JMeter LoadBalancing Test Done'
+    sleep 15
+    
+    task'ZAP Security Test'
+    echo'ZAP Security Test Started'
+    build job: 'dotnetzap'
+    echo'ZAP Security Test Done'
+    sleep 3
+}
+    stage('PROD') {
+    //task'builddockerimage'
+    //echo'Build Docker Image'
+    //'bat docker build -t dotnetdev-img .'
+    sleep 30
+    
+   task'Push to Docker Hub'
+   echo'Push To Docker Hub'
+   //bat 'docker tag dotnetdev-img salientcrgt/dotnetdev-img'
+   //bat 'docker push salientcrgt/dotnetdev-img:latest'
+   bat 'docker tag dotnet-img iiiradmicro1/dotnet-img:prod'
+   bat 'docker push iiiradmicro1/dotnet-img:prod'
+   sleep 15
+    
+   task'Deploy-PROD'
+   echo'Deploy to PROD Environment'
+   sleep 15
+   
+   task'Smoke Test'
+   echo'Selenium-Smoke Test'
+   sleep 3
+    }
+}
+
